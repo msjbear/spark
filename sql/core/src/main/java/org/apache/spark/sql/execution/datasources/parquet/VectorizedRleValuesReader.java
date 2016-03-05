@@ -25,7 +25,6 @@ import org.apache.parquet.column.values.bitpacking.Packer;
 import org.apache.parquet.io.ParquetDecodingException;
 import org.apache.parquet.io.api.Binary;
 
-import org.apache.spark.sql.Column;
 import org.apache.spark.sql.execution.vectorized.ColumnVector;
 
 /**
@@ -239,38 +238,6 @@ public final class VectorizedRleValuesReader extends ValuesReader
     }
   }
 
-  public void readIntsAsLongs(int total, ColumnVector c,
-                        int rowId, int level, VectorizedValuesReader data) {
-    int left = total;
-    while (left > 0) {
-      if (this.currentCount == 0) this.readNextGroup();
-      int n = Math.min(left, this.currentCount);
-      switch (mode) {
-        case RLE:
-          if (currentValue == level) {
-            for (int i = 0; i < n; i++) {
-              c.putLong(rowId + i, data.readInteger());
-            }
-          } else {
-            c.putNulls(rowId, n);
-          }
-          break;
-        case PACKED:
-          for (int i = 0; i < n; ++i) {
-            if (currentBuffer[currentBufferIdx++] == level) {
-              c.putLong(rowId + i, data.readInteger());
-            } else {
-              c.putNull(rowId + i);
-            }
-          }
-          break;
-      }
-      rowId += n;
-      left -= n;
-      currentCount -= n;
-    }
-  }
-
   public void readBytes(int total, ColumnVector c,
                         int rowId, int level, VectorizedValuesReader data) {
     int left = total;
@@ -289,6 +256,38 @@ public final class VectorizedRleValuesReader extends ValuesReader
           for (int i = 0; i < n; ++i) {
             if (currentBuffer[currentBufferIdx++] == level) {
               c.putByte(rowId + i, data.readByte());
+            } else {
+              c.putNull(rowId + i);
+            }
+          }
+          break;
+      }
+      rowId += n;
+      left -= n;
+      currentCount -= n;
+    }
+  }
+
+  public void readShorts(int total, ColumnVector c,
+                        int rowId, int level, VectorizedValuesReader data) {
+    int left = total;
+    while (left > 0) {
+      if (this.currentCount == 0) this.readNextGroup();
+      int n = Math.min(left, this.currentCount);
+      switch (mode) {
+        case RLE:
+          if (currentValue == level) {
+            for (int i = 0; i < n; i++) {
+              c.putShort(rowId + i, (short)data.readInteger());
+            }
+          } else {
+            c.putNulls(rowId, n);
+          }
+          break;
+        case PACKED:
+          for (int i = 0; i < n; ++i) {
+            if (currentBuffer[currentBufferIdx++] == level) {
+              c.putShort(rowId + i, (short)data.readInteger());
             } else {
               c.putNull(rowId + i);
             }
