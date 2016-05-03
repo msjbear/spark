@@ -35,6 +35,9 @@ import org.apache.spark.sql.types.{ArrayType, Decimal, ObjectType, StructType}
 case class RepeatedStruct(s: Seq[PrimitiveData])
 
 case class NestedArray(a: Array[Array[Int]]) {
+  override def hashCode(): Int =
+    java.util.Arrays.deepHashCode(a.asInstanceOf[Array[AnyRef]])
+
   override def equals(other: Any): Boolean = other match {
     case NestedArray(otherArray) =>
       java.util.Arrays.deepEquals(
@@ -64,15 +67,21 @@ case class SpecificCollection(l: List[Int])
 
 /** For testing Kryo serialization based encoder. */
 class KryoSerializable(val value: Int) {
-  override def equals(other: Any): Boolean = {
-    this.value == other.asInstanceOf[KryoSerializable].value
+  override def hashCode(): Int = value
+
+  override def equals(other: Any): Boolean = other match {
+    case that: KryoSerializable => this.value == that.value
+    case _ => false
   }
 }
 
 /** For testing Java serialization based encoder. */
 class JavaSerializable(val value: Int) extends Serializable {
-  override def equals(other: Any): Boolean = {
-    this.value == other.asInstanceOf[JavaSerializable].value
+  override def hashCode(): Int = value
+
+  override def equals(other: Any): Boolean = other match {
+    case that: JavaSerializable => this.value == that.value
+    case _ => false
   }
 }
 
@@ -315,7 +324,7 @@ class ExpressionEncoderSuite extends PlanTest with AnalysisTest {
       val attr = AttributeReference("obj", ObjectType(encoder.clsTag.runtimeClass))()
       val inputPlan = LocalRelation(attr)
       val plan =
-        Project(Alias(encoder.fromRowExpression, "obj")() :: Nil,
+        Project(Alias(encoder.deserializer, "obj")() :: Nil,
           Project(encoder.namedExpressions,
             inputPlan))
       assertAnalysisSuccess(plan)
@@ -360,7 +369,7 @@ class ExpressionEncoderSuite extends PlanTest with AnalysisTest {
              |${encoder.schema.treeString}
              |
              |fromRow Expressions:
-             |${boundEncoder.fromRowExpression.treeString}
+             |${boundEncoder.deserializer.treeString}
          """.stripMargin)
       }
     }
