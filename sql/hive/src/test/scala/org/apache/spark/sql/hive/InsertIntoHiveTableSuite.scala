@@ -36,9 +36,9 @@ case class ThreeCloumntable(key: Int, value: String, key1: String)
 
 class InsertIntoHiveTableSuite extends QueryTest with TestHiveSingleton with BeforeAndAfter
     with SQLTestUtils {
-  import hiveContext.implicits._
+  import spark.implicits._
 
-  override lazy val testData = hiveContext.sparkContext.parallelize(
+  override lazy val testData = spark.sparkContext.parallelize(
     (1 to 100).map(i => TestData(i, i.toString))).toDF()
 
   before {
@@ -95,9 +95,9 @@ class InsertIntoHiveTableSuite extends QueryTest with TestHiveSingleton with Bef
 
   test("SPARK-4052: scala.collection.Map as value type of MapType") {
     val schema = StructType(StructField("m", MapType(StringType, StringType), true) :: Nil)
-    val rowRDD = hiveContext.sparkContext.parallelize(
+    val rowRDD = spark.sparkContext.parallelize(
       (1 to 100).map(i => Row(scala.collection.mutable.HashMap(s"key$i" -> s"value$i"))))
-    val df = hiveContext.createDataFrame(rowRDD, schema)
+    val df = spark.createDataFrame(rowRDD, schema)
     df.createOrReplaceTempView("tableWithMapValue")
     sql("CREATE TABLE hiveTableWithMapValue(m MAP <STRING, STRING>)")
     sql("INSERT OVERWRITE TABLE hiveTableWithMapValue SELECT m FROM tableWithMapValue")
@@ -166,11 +166,79 @@ class InsertIntoHiveTableSuite extends QueryTest with TestHiveSingleton with Bef
     sql("DROP TABLE tmp_table")
   }
 
+  test("INSERT OVERWRITE - partition IF NOT EXISTS") {
+    withTempDir { tmpDir =>
+      val table = "table_with_partition"
+      withTable(table) {
+        val selQuery = s"select c1, p1, p2 from $table"
+        sql(
+          s"""
+             |CREATE TABLE $table(c1 string)
+             |PARTITIONED by (p1 string,p2 string)
+             |location '${tmpDir.toURI.toString}'
+           """.stripMargin)
+        sql(
+          s"""
+             |INSERT OVERWRITE TABLE $table
+             |partition (p1='a',p2='b')
+             |SELECT 'blarr'
+           """.stripMargin)
+        checkAnswer(
+          sql(selQuery),
+          Row("blarr", "a", "b"))
+
+        sql(
+          s"""
+             |INSERT OVERWRITE TABLE $table
+             |partition (p1='a',p2='b')
+             |SELECT 'blarr2'
+           """.stripMargin)
+        checkAnswer(
+          sql(selQuery),
+          Row("blarr2", "a", "b"))
+
+        var e = intercept[AnalysisException] {
+          sql(
+            s"""
+               |INSERT OVERWRITE TABLE $table
+               |partition (p1='a',p2) IF NOT EXISTS
+               |SELECT 'blarr3', 'newPartition'
+             """.stripMargin)
+        }
+        assert(e.getMessage.contains(
+          "Dynamic partitions do not support IF NOT EXISTS. Specified partitions with value: [p2]"))
+
+        e = intercept[AnalysisException] {
+          sql(
+            s"""
+               |INSERT OVERWRITE TABLE $table
+               |partition (p1='a',p2) IF NOT EXISTS
+               |SELECT 'blarr3', 'b'
+             """.stripMargin)
+        }
+        assert(e.getMessage.contains(
+          "Dynamic partitions do not support IF NOT EXISTS. Specified partitions with value: [p2]"))
+
+        // If the partition already exists, the insert will overwrite the data
+        // unless users specify IF NOT EXISTS
+        sql(
+          s"""
+             |INSERT OVERWRITE TABLE $table
+             |partition (p1='a',p2='b') IF NOT EXISTS
+             |SELECT 'blarr3'
+           """.stripMargin)
+        checkAnswer(
+          sql(selQuery),
+          Row("blarr2", "a", "b"))
+      }
+    }
+  }
+
   test("Insert ArrayType.containsNull == false") {
     val schema = StructType(Seq(
       StructField("a", ArrayType(StringType, containsNull = false))))
-    val rowRDD = hiveContext.sparkContext.parallelize((1 to 100).map(i => Row(Seq(s"value$i"))))
-    val df = hiveContext.createDataFrame(rowRDD, schema)
+    val rowRDD = spark.sparkContext.parallelize((1 to 100).map(i => Row(Seq(s"value$i"))))
+    val df = spark.createDataFrame(rowRDD, schema)
     df.createOrReplaceTempView("tableWithArrayValue")
     sql("CREATE TABLE hiveTableWithArrayValue(a Array <STRING>)")
     sql("INSERT OVERWRITE TABLE hiveTableWithArrayValue SELECT a FROM tableWithArrayValue")
@@ -185,9 +253,9 @@ class InsertIntoHiveTableSuite extends QueryTest with TestHiveSingleton with Bef
   test("Insert MapType.valueContainsNull == false") {
     val schema = StructType(Seq(
       StructField("m", MapType(StringType, StringType, valueContainsNull = false))))
-    val rowRDD = hiveContext.sparkContext.parallelize(
+    val rowRDD = spark.sparkContext.parallelize(
       (1 to 100).map(i => Row(Map(s"key$i" -> s"value$i"))))
-    val df = hiveContext.createDataFrame(rowRDD, schema)
+    val df = spark.createDataFrame(rowRDD, schema)
     df.createOrReplaceTempView("tableWithMapValue")
     sql("CREATE TABLE hiveTableWithMapValue(m Map <STRING, STRING>)")
     sql("INSERT OVERWRITE TABLE hiveTableWithMapValue SELECT m FROM tableWithMapValue")
@@ -202,9 +270,9 @@ class InsertIntoHiveTableSuite extends QueryTest with TestHiveSingleton with Bef
   test("Insert StructType.fields.exists(_.nullable == false)") {
     val schema = StructType(Seq(
       StructField("s", StructType(Seq(StructField("f", StringType, nullable = false))))))
-    val rowRDD = hiveContext.sparkContext.parallelize(
+    val rowRDD = spark.sparkContext.parallelize(
       (1 to 100).map(i => Row(Row(s"value$i"))))
-    val df = hiveContext.createDataFrame(rowRDD, schema)
+    val df = spark.createDataFrame(rowRDD, schema)
     df.createOrReplaceTempView("tableWithStructValue")
     sql("CREATE TABLE hiveTableWithStructValue(s Struct <f: STRING>)")
     sql("INSERT OVERWRITE TABLE hiveTableWithStructValue SELECT s FROM tableWithStructValue")
@@ -276,6 +344,43 @@ class InsertIntoHiveTableSuite extends QueryTest with TestHiveSingleton with Bef
 
       checkAnswer(sql("SELECT * FROM partitioned"), expected.collect().toSeq)
     }
+  }
+
+  private def testPartitionedHiveSerDeTable(testName: String)(f: String => Unit): Unit = {
+    test(s"Hive SerDe table - $testName") {
+      val hiveTable = "hive_table"
+
+      withTable(hiveTable) {
+        withSQLConf("hive.exec.dynamic.partition.mode" -> "nonstrict") {
+          sql(s"CREATE TABLE $hiveTable (a INT) PARTITIONED BY (b INT, c INT) STORED AS TEXTFILE")
+          f(hiveTable)
+        }
+      }
+    }
+  }
+
+  private def testPartitionedDataSourceTable(testName: String)(f: String => Unit): Unit = {
+    test(s"Data source table - $testName") {
+      val dsTable = "ds_table"
+
+      withTable(dsTable) {
+        sql(s"CREATE TABLE $dsTable (a INT, b INT, c INT) USING PARQUET PARTITIONED BY (b, c)")
+        f(dsTable)
+      }
+    }
+  }
+
+  private def testPartitionedTable(testName: String)(f: String => Unit): Unit = {
+    testPartitionedHiveSerDeTable(testName)(f)
+    testPartitionedDataSourceTable(testName)(f)
+  }
+
+  testPartitionedTable("partitionBy() can't be used together with insertInto()") { tableName =>
+    val cause = intercept[AnalysisException] {
+      Seq((1, 2, 3)).toDF("a", "b", "c").write.partitionBy("b", "c").insertInto(tableName)
+    }
+
+    assert(cause.getMessage.contains("insertInto() can't be used together with partitionBy()."))
   }
 
   test("InsertIntoTable#resolved should include dynamic partitions") {

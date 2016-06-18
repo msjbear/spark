@@ -2185,7 +2185,7 @@ setMethod("from_unixtime", signature(x = "Column"),
 #'    # 09:01:15-09:02:15...
 #'   window(df$time, "1 minute", startTime = "15 seconds")
 #'
-#'   # Thirty second windows every 10 seconds, e.g. 09:00:00-09:00:30, 09:00:10-09:00:40, ...
+#'   # Thirty-second windows every 10 seconds, e.g. 09:00:00-09:00:30, 09:00:10-09:00:40, ...
 #'   window(df$time, "30 seconds", "10 seconds")
 #'}
 setMethod("window", signature(x = "Column"),
@@ -2226,7 +2226,7 @@ setMethod("window", signature(x = "Column"),
 #' @export
 #' @examples \dontrun{locate('b', df$c, 1)}
 setMethod("locate", signature(substr = "character", str = "Column"),
-          function(substr, str, pos = 0) {
+          function(substr, str, pos = 1) {
             jc <- callJStatic("org.apache.spark.sql.functions",
                               "locate",
                               substr, str@jc, as.integer(pos))
