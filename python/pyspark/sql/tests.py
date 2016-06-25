@@ -177,6 +177,10 @@ class DataTypeTests(unittest.TestCase):
         dt = DateType()
         self.assertEqual(dt.fromInternal(0), datetime.date(1970, 1, 1))
 
+    def test_empty_row(self):
+        row = Row()
+        self.assertEqual(len(row), 0)
+
 
 class SQLTests(ReusedPySparkTestCase):
 
@@ -318,6 +322,11 @@ class SQLTests(ReusedPySparkTestCase):
         [row] = self.spark.sql("SELECT double(add(1, 2)), add(double(2), 1)").collect()
         self.assertEqual(tuple(row), (6, 5))
 
+    def test_udf_without_arguments(self):
+        self.spark.catalog.registerFunction("foo", lambda: "bar")
+        [row] = self.spark.sql("SELECT foo()").collect()
+        self.assertEqual(row[0], "bar")
+
     def test_udf_with_array_type(self):
         d = [Row(l=list(range(3)), d={"key": list(range(5))})]
         rdd = self.sc.parallelize(d)
@@ -353,6 +362,13 @@ class SQLTests(ReusedPySparkTestCase):
             .agg(sum(my_strlen(col("value"))).alias("s"))\
             .select(my_add(col("k"), col("s")).alias("t"))
         self.assertEqual(sel.collect(), [Row(t=4), Row(t=3)])
+
+    def test_udf_in_generate(self):
+        from pyspark.sql.functions import udf, explode
+        df = self.spark.range(5)
+        f = udf(lambda x: list(range(x)), ArrayType(LongType()))
+        row = df.select(explode(f(*df))).groupBy().sum().first()
+        self.assertEqual(row[0], 10)
 
     def test_basic_functions(self):
         rdd = self.sc.parallelize(['{"foo":"bar"}', '{"foo":"baz"}'])
