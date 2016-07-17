@@ -147,10 +147,6 @@ private[hive] class HiveMetastoreCatalog(sparkSession: SparkSession) extends Log
     // it is better at here to invalidate the cache to avoid confusing waring logs from the
     // cache loader (e.g. cannot find data source provider, which is only defined for
     // data source table.).
-    invalidateTable(tableIdent)
-  }
-
-  def invalidateTable(tableIdent: TableIdentifier): Unit = {
     cachedDataSourceTables.invalidate(getQualifiedTableName(tableIdent))
   }
 
@@ -184,8 +180,10 @@ private[hive] class HiveMetastoreCatalog(sparkSession: SparkSession) extends Log
           SubqueryAlias(aliasText, sessionState.sqlParser.parsePlan(viewText))
       }
     } else {
-      MetastoreRelation(
-        qualifiedTableName.database, qualifiedTableName.name, alias)(table, client, sparkSession)
+      val qualifiedTable =
+        MetastoreRelation(
+          qualifiedTableName.database, qualifiedTableName.name)(table, client, sparkSession)
+      alias.map(a => SubqueryAlias(a, qualifiedTable)).getOrElse(qualifiedTable)
     }
   }
 
@@ -389,7 +387,7 @@ private[hive] class HiveMetastoreCatalog(sparkSession: SparkSession) extends Log
         // Read path
         case relation: MetastoreRelation if shouldConvertMetastoreParquet(relation) =>
           val parquetRelation = convertToParquetRelation(relation)
-          SubqueryAlias(relation.alias.getOrElse(relation.tableName), parquetRelation)
+          SubqueryAlias(relation.tableName, parquetRelation)
       }
     }
   }
@@ -427,7 +425,7 @@ private[hive] class HiveMetastoreCatalog(sparkSession: SparkSession) extends Log
         // Read path
         case relation: MetastoreRelation if shouldConvertMetastoreOrc(relation) =>
           val orcRelation = convertToOrcRelation(relation)
-          SubqueryAlias(relation.alias.getOrElse(relation.tableName), orcRelation)
+          SubqueryAlias(relation.tableName, orcRelation)
       }
     }
   }
